@@ -108,7 +108,7 @@ static void
 nc_multiplicity_func_ps_init (NcMultiplicityFuncPS *mulf_ps)
 {
   /* TODO: Add initialization code here */
-  mulf_ps->delta_c = 1.6864701998411454502;
+  mulf_ps->delta_c = 0.0;
 }
 
 static void
@@ -175,7 +175,7 @@ nc_multiplicity_func_ps_class_init (NcMultiplicityFuncPSClass *klass)
                                    g_param_spec_double ("critical-delta",
                                                         NULL,
                                                         "Critical delta",
-                                                        -G_MAXDOUBLE, G_MAXDOUBLE, 1.686,
+                                                        -G_MAXDOUBLE, G_MAXDOUBLE, 1.6864701998411454502,
                                                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
 }
 

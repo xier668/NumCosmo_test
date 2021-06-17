@@ -205,11 +205,10 @@ nc_multiplicity_func_st_get_delta_c (const NcMultiplicityFuncST *mulf_st)
 static void
 nc_multiplicity_func_st_init (NcMultiplicityFuncST *mulf_st)
 {
-  /* TODO: Add initialization code here */
-  mulf_st->A = 0.3222;
-  mulf_st->b = 0.707;
-  mulf_st->p = 0.3;
-  mulf_st->delta_c = 1.6864701998411454502;
+  mulf_st->A       = 0.0;
+  mulf_st->b       = 0.0;
+  mulf_st->p       = 0.0;
+  mulf_st->delta_c = 0.0;
 }
 
 static void
@@ -330,7 +329,7 @@ nc_multiplicity_func_st_class_init (NcMultiplicityFuncSTClass *klass)
                                    g_param_spec_double ("critical-delta",
                                                         NULL,
                                                         "Critical delta",
-                                                        -G_MAXDOUBLE, G_MAXDOUBLE, 1.686,
+                                                        -G_MAXDOUBLE, G_MAXDOUBLE, 1.6864701998411454502,
                                                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
 }
 
