@@ -665,6 +665,18 @@ if test "x$HAVE_ARB" = "xyes"; then
 fi
 
 dnl ***************************************************************************
+dnl Check for osqp
+dnl ***************************************************************************
+
+AC_CHECK_HEADERS([osqp/osqp.h])
+AC_CHECK_LIB([osqp],[osqp_set_default_settings])
+AC_SEARCH_LIBS([osqp_set_default_settings],[osqp], [HAVE_OSQP=yes])
+
+if test "x$HAVE_OSQP" = "xyes"; then
+  AC_CHECK_FUNCS([osqp_set_default_settings osqp_setup osqp_solve osqp_cleanup])
+fi
+
+dnl ***************************************************************************
 dnl Check for hdf5 support
 dnl ***************************************************************************
 AX_LIB_HDF5()
@@ -1138,6 +1150,11 @@ if [ test "x$HAVE_ARB" = xyes ]; then
 else
        echo "Building with ARB support: .......................................NO"
 fi
+if [ test "x$HAVE_OSQP" = xyes ]; then
+       echo "Building with OSQP support: .....................................YES"
+else
+       echo "Building with OSQP support: ......................................NO"
+fi
 echo "--------------------------------------------------------------------"
 echo "AM_CFLAGS = $AM_CFLAGS"
 echo "CFLAGS = $CFLAGS"
@@ -1149,7 +1166,7 @@ echo "PLC_DEFINES = $PLC_DEFINES"
 echo "PLC_NOWARN_FLAGS = $PLC_NOWARN_FLAGS"
 echo "PLC_FC_NOWARN_FLAGS = $PLC_FC_NOWARN_FLAGS"
 
-if [ test "x$HAVE_ARB" = xyes ]; then
+if [ test "x$with_hdf5" = xyes ]; then
   echo "HDF5_CPPFLAGS = $HDF5_CPPFLAGS"
   echo "HDF5_CFLAGS = $HDF5_CFLAGS"
   echo "HDF5_LDFLAGS = $HDF5_LDFLAGS"
