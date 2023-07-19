@@ -61,13 +61,13 @@ struct _NcGalaxyWLLikelihoodPrivate
   NcGalaxySDZProxy *zp_dist;
   NcGalaxySDPosition *rz_dist;
   NcmStatsDist1dEPDF *kde;
-  // gdouble cut_fraction;
+  gdouble cut_fraction;
   gdouble zp_min;
   gdouble zp_max;
-  // gdouble r_min;
-  // gdouble r_max;
   gdouble sigma;
-  gdouble ndata;
+  gdouble scale_cut;
+  gint ndata;
+  gboolean constructed;
   guint len;
 };
 
@@ -78,6 +78,11 @@ enum
   PROP_ZP_DIST,
   PROP_RZ_DIST,
   PROP_KDE,
+  PROP_ZP_MIN,
+  PROP_ZP_MAX,
+  PROP_SIGMA,
+  PROP_SCALE_CUT,
+  PROP_NDATA,
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (NcGalaxyWLLikelihood, nc_galaxy_wl_likelihood, G_TYPE_OBJECT);
@@ -87,13 +92,18 @@ nc_galaxy_wl_likelihood_init (NcGalaxyWLLikelihood *gwl)
 {
   NcGalaxyWLLikelihoodPrivate * const self = gwl->priv = nc_galaxy_wl_likelihood_get_instance_private (gwl);
 
-  self->obs     = NULL;
-  self->zp_dist = NULL;
-  self->rz_dist = NULL;
-  self->kde     = ncm_stats_dist1d_epdf_new_full (20000, NCM_STATS_DIST1D_EPDF_BW_RoT, 0.1, 1.0e-2);
-  self->len     = 0;
-  self->ndata   = 1000;
-  self->samples = ncm_matrix_new (self->ndata, 2);
+  self->obs         = NULL;
+  self->zp_dist     = NULL;
+  self->rz_dist     = NULL;
+  self->kde         = ncm_stats_dist1d_epdf_new_full (20000, NCM_STATS_DIST1D_EPDF_BW_RoT, 0.1, 1.0e-2);
+  self->len         = 0;
+  self->zp_max      = 0.0;
+  self->zp_min      = 0.0;
+  self->sigma       = 0.0;
+  self->scale_cut   = 0.0;
+  self->ndata       = 0;
+  self->constructed = FALSE;
+  self->samples     = NULL;
 }
 
 static void
@@ -114,6 +124,29 @@ _nc_galaxy_wl_likelihood_set_property (GObject *object, guint prop_id, const GVa
       break;
     case PROP_RZ_DIST:
       self->rz_dist = g_value_dup_object (value);
+      break;
+    case PROP_ZP_MIN:
+      self->zp_min = g_value_get_double (value);
+
+      if (self->constructed)
+        g_assert_cmpfloat (self->zp_min, <, self->zp_max);
+
+      break;
+    case PROP_ZP_MAX:
+      self->zp_max = g_value_get_double (value);
+
+      if (self->constructed)
+        g_assert_cmpfloat (self->zp_min, <, self->zp_max);
+
+      break;
+    case PROP_SIGMA:
+      nc_galaxy_wl_likelihood_set_sigma (gwl, g_value_get_double (value));
+      break;
+    case PROP_SCALE_CUT:
+      nc_galaxy_wl_likelihood_set_scale_cut (gwl, g_value_get_double (value));
+      break;
+    case PROP_NDATA:
+      nc_galaxy_wl_likelihood_set_ndata (gwl, g_value_get_int (value));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -140,6 +173,23 @@ _nc_galaxy_wl_likelihood_get_property (GObject *object, guint prop_id, GValue *v
     case PROP_RZ_DIST:
       g_value_set_object (value, self->rz_dist);
       break;
+    case PROP_KDE:
+      g_value_set_object (value, nc_galaxy_wl_likelihood_peek_kde (gwl));
+      break;
+    case PROP_ZP_MIN:
+      g_value_set_double (value, self->zp_min);
+      break;
+    case PROP_ZP_MAX:
+      g_value_set_double (value, self->zp_max);
+      break;
+    case PROP_SIGMA:
+      g_value_set_double (value, self->sigma);
+    case PROP_SCALE_CUT:
+      g_value_set_double (value, self->scale_cut);
+      break;
+    case PROP_NDATA:
+      g_value_set_int (value, self->ndata);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -156,6 +206,8 @@ _nc_galaxy_wl_likelihood_dispose (GObject *object)
   nc_galaxy_sd_z_proxy_clear (&self->zp_dist);
   nc_galaxy_sd_position_clear (&self->rz_dist);
 
+  ncm_stats_dist1d_epdf_clear (&self->kde);
+
   G_OBJECT_CLASS (nc_galaxy_wl_likelihood_parent_class)->dispose (object);
 }
 
@@ -163,6 +215,21 @@ static void
 _nc_galaxy_wl_likelihood_finalize (GObject *object)
 {
   G_OBJECT_CLASS (nc_galaxy_wl_likelihood_parent_class)->finalize (object);
+}
+
+static void
+_nc_galaxy_wl_likelihood_constructed (GObject *object)
+{
+  /* Chain up : start */
+  G_OBJECT_CLASS (nc_galaxy_wl_likelihood_parent_class)->constructed (object);
+  {
+    NcGalaxyWLLikelihood *gwl                = NC_GALAXY_WL_LIKELIHOOD (object);
+    NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
+
+    g_assert_cmpfloat (self->zp_min, <, self->zp_max);
+
+    self->constructed = TRUE;
+  }
 }
 
 static void
@@ -174,6 +241,7 @@ nc_galaxy_wl_likelihood_class_init (NcGalaxyWLLikelihoodClass *klass)
   object_class->get_property = &_nc_galaxy_wl_likelihood_get_property;
   object_class->dispose      = &_nc_galaxy_wl_likelihood_dispose;
   object_class->finalize     = &_nc_galaxy_wl_likelihood_finalize;
+  object_class->constructed  = &_nc_galaxy_wl_likelihood_constructed;
 
   /**
    * NcGalaxyWLLikelihood:obs:
@@ -218,6 +286,80 @@ nc_galaxy_wl_likelihood_class_init (NcGalaxyWLLikelihoodClass *klass)
                                                         "Galaxy sample position distribution",
                                                         NC_TYPE_GALAXY_SD_POSITION,
                                                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
+
+  /**
+   * NcGalaxyWLLikelihood:zp-min:
+   *
+   * Minimum redshift of the weak lensing observables.
+   *
+   */
+
+  g_object_class_install_property (object_class,
+                                   PROP_ZP_MIN,
+                                   g_param_spec_double ("zp-min",
+                                                        NULL,
+                                                        "Minimum redshift of the weak lensing observables",
+                                                        0.0, G_MAXDOUBLE, 0.0,
+                                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
+
+  /**
+   * NcGalaxyWLLikelihood:zp-max:
+   *
+   * Maximum redshift of the weak lensing observables.
+   *
+   */
+  g_object_class_install_property (object_class,
+                                   PROP_ZP_MAX,
+                                   g_param_spec_double ("zp-max",
+                                                        NULL,
+                                                        "Maximum redshift of the weak lensing observables",
+                                                        0.0, G_MAXDOUBLE, 10.0,
+                                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
+
+  /**
+   * NcGalaxyWLLikelihood:sigma:
+   *
+   * Maximum redshift of the weak lensing observables.
+   *
+   */
+
+  g_object_class_install_property (object_class,
+                                   PROP_SIGMA,
+                                   g_param_spec_double ("sigma",
+                                                        NULL,
+                                                        "Maximum redshift of the weak lensing observables",
+                                                        0.0, G_MAXDOUBLE, 10.0,
+                                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
+
+  /**
+   * NcGalaxyWLLikelihood:scale-cut:
+   *
+   * Scale of probability at which to include a sample in the cut.
+   *
+   */
+
+  g_object_class_install_property (object_class,
+                                   PROP_SCALE_CUT,
+                                   g_param_spec_double ("scale-cut",
+                                                        NULL,
+                                                        "Scale of probability at which to include a sample in the cut",
+                                                        0.0, 1.0, 0.00001,
+                                                        G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
+
+  /**
+   * NcGalaxyWLLikelihood:ndata:
+   *
+   * Number of data points to sample for KDE.
+   *
+   */
+
+  g_object_class_install_property (object_class,
+                                   PROP_NDATA,
+                                   g_param_spec_int ("ndata",
+                                                     NULL,
+                                                     "Number of data points to sample for KDE",
+                                                     0.0, G_MAXINT, 10000.0,
+                                                     G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_NAME | G_PARAM_STATIC_BLURB));
 }
 
 /**
@@ -320,61 +462,75 @@ nc_galaxy_wl_likelihood_peek_obs (NcGalaxyWLLikelihood *gwl)
   return self->obs;
 }
 
-void
-nc_galaxy_wl_likelihood_prepare (NcGalaxyWLLikelihood *gwl, NcHICosmo *cosmo, NcHaloDensityProfile *dp, NcWLSurfaceMassDensity *smd, const gdouble z_cluster, gdouble *cut_fraction)
+/**
+ * nc_galaxy_wl_likelihood_peek_kde:
+ * @gwl: a #NcGalaxyWLLikelihood
+ *
+ * Gets the observables matrix.
+ *
+ * Returns: (transfer none): the observables matrix.
+ */
+NcmStatsDist1dEPDF *
+nc_galaxy_wl_likelihood_peek_kde (NcGalaxyWLLikelihood *gwl)
 {
   NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
-  // NcmVector *sample                        = ncm_vector_new (1);
-  NcmVector *pos                           = ncm_vector_new (2);
-  NcmRNG *rng                              = ncm_rng_new (NULL);
-  // gdouble in_cut                           = 0;
-  // gdouble out_cut                          = 0;
 
-  gint i;
+  return self->kde;
+}
+
+void
+nc_galaxy_wl_likelihood_prepare (NcGalaxyWLLikelihood *gwl, NcHICosmo *cosmo, NcHaloDensityProfile *dp, NcWLSurfaceMassDensity *smd, const gdouble z_cluster)
+{
+  NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
+  NcmRNG *rng                              = ncm_rng_new (NULL);
+  gdouble in_cut                             = 0;
+  gdouble out_cut                            = 0;
+  gdouble avg                              = 0.0;
+  gdouble sigma                            = 0.0;
+  gint i                                   = 0;
 
   ncm_stats_dist1d_epdf_reset (self->kde);
 
-  for (i = 0; i < self->ndata; i++)
+  while (i < self->ndata)
   {
+    gdouble z;
+    gdouble zp;
+
     while (TRUE)
     {
-      gdouble zp = 0.0;
-      gdouble z;
-
-      nc_galaxy_sd_position_gen (self->rz_dist, pos, rng);
-
-      z = ncm_vector_get (pos, 0);
-      // r = ncm_vector_get (pos, 1);
+      nc_galaxy_sd_position_gen_z (self->rz_dist, rng, &z);
 
       if (nc_galaxy_sd_z_proxy_gen (self->zp_dist, rng, z, &zp))
-      {
-        // const gdouble s = nc_galaxy_sd_shape_gen (self->s_dist, cosmo, dp, smd, z_cluster, rng, pos);
-
-        // ncm_vector_set (sample, 0, r);
-        // ncm_vector_set (sample, 1, zp);
-        // ncm_vector_set (sample, 2, s);
-
-        // if ((self->zp_min <= zp) && (zp <= self->zp_max))
-        //   in_cut++;
-        // else
-        //   out_cut++;
-
-        ncm_matrix_set (self->samples, i, 0, zp);
-        ncm_matrix_set (self->samples, i, 1, z);
-
-        ncm_stats_dist1d_epdf_add_obs (self->kde, zp);
         break;
+    }
+
+    {
+      if ((zp_i >= self->zp_min) && (self->zp_max >= zp_i))
+      {
+        i++;
+        in_cut++;
       }
+      else
+      {
+        out_cut++;
+      }
+
+      ncm_matrix_set (self->samples, i, 0, zp);
+      ncm_matrix_set (self->samples, i, 1, z);
+
+      ncm_stats_dist1d_epdf_add_obs (self->kde, zp);
+      avg = avg_i;
+      sigma = sigma_i;
     }
   }
 
-  // cut_fraction[0] = in_cut / (in_cut + out_cut);
+  self->cut_fraction = in_cut / (in_cut + out_cut);
+
+  // printf ("%f\n", self->cut_fraction);
 
   ncm_stats_dist1d_prepare (NCM_STATS_DIST1D (self->kde));
 
   ncm_rng_clear (&rng);
-  ncm_vector_clear (&pos);
-  // ncm_vector_clear (&sample);
 }
 
 /**
@@ -415,13 +571,10 @@ gdouble
 nc_galaxy_wl_likelihood_kde_eval_m2lnP (NcGalaxyWLLikelihood *gwl, NcHICosmo *cosmo, NcHaloDensityProfile *dp, NcWLSurfaceMassDensity *smd, const gdouble z_cluster)
 {
   NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
-  // NcmVector *data_vec                      = ncm_vector_new (1);
   gdouble res                              = 0.0;
-  // gdouble in_cut                           = 0;
-  gdouble cut_fraction                     = 0;
   gint gal_i;
 
-  nc_galaxy_wl_likelihood_prepare (gwl, cosmo, dp, smd, z_cluster, &cut_fraction);
+  nc_galaxy_wl_likelihood_prepare (gwl, cosmo, dp, smd, z_cluster);
 
   for (gal_i = 0; gal_i < self->len; gal_i++)
   {
@@ -430,24 +583,16 @@ nc_galaxy_wl_likelihood_kde_eval_m2lnP (NcGalaxyWLLikelihood *gwl, NcHICosmo *co
     const gdouble et_i = ncm_matrix_get (self->obs, gal_i, 2);
     const gdouble ex_i = ncm_matrix_get (self->obs, gal_i, 3);
 
-    // ncm_vector_set (data_vec, 0, zp_i);
-
-    gdouble p = ncm_stats_dist1d_eval_p (NCM_STATS_DIST1D (self->kde), zp_i);
-
-    if (p == 0)
+    if ((zp_i >= self->zp_min) && (self->zp_max >= zp_i))
     {
-      printf ("r_i = %f, zp_i = %f\n", r_i, zp_i);
-    }
-    else
-    {
-      res -= 2 * log (p);
+      gdouble p = ncm_stats_dist1d_eval_p (NCM_STATS_DIST1D (self->kde), zp_i);
 
       gint closest = 0;
       gint j;
 
       for (j = 0; j < self->ndata; j++)
       {
-        if (abs (zp_i - ncm_matrix_get (self->samples, j, 0) < abs (zp_i - ncm_matrix_get (self->samples, closest, 0))))
+        if (abs (zp_i - ncm_matrix_get (self->samples, j, 0)) < abs (zp_i - ncm_matrix_get (self->samples, closest, 0)))
           closest = j;
       }
 
@@ -460,41 +605,11 @@ nc_galaxy_wl_likelihood_kde_eval_m2lnP (NcGalaxyWLLikelihood *gwl, NcHICosmo *co
       gdouble et = creal (e_source);
       gdouble ex = cimag (e_source);
 
-      res += (et * et + ex * ex ) / (self->sigma * self->sigma);
+      res -= 2 * log (p);
+      res += (et * et + ex * ex) / (self->sigma * self->sigma);
+      res += 4 * log (sqrt (2 * M_PI) * self->sigma);
     }
-
-    // res += ncm_stats_dist1d_eval_m2lnp (NCM_STATS_DIST1D (self->kde), zp_i);
-
-    // gint closest = 0;
-    // gint j;
-
-    // for (j = 0; j < self->ndata; j++)
-    // {
-    //   if (abs (zp_i - ncm_matrix_get (self->samples, j, 0) < abs (zp_i - ncm_matrix_get (self->samples, closest, 0))))
-    //     closest = j;
-    // }
-
-    // gdouble z_i = ncm_matrix_get (self->samples, closest, 1);
-
-    // complex double e_obs    = et_i + I * ex_i;
-    // complex double shear    = nc_wl_surface_mass_density_reduced_shear (smd, dp, cosmo, r_i, z_i, z_cluster, z_cluster);
-    // complex double e_source = (e_obs - shear) / (1.0 - conj (shear) * e_obs);
-
-    // gdouble et = creal (e_source);
-    // gdouble ex = cimag (e_source);
-
-    // res += (et * et + ex * ex ) / (self->sigma * self->sigma);
-
-    // if ((self->r_min <= r_i) && (r_i <= self->r_max) && (self->zp_min <= z_i) && (z_i <= self->zp_max))
-    // {
-    //   // in_cut++;
-    //   res += ncm_stats_dist_eval_m2lnp (NCM_STATS_DIST (self->kde), data_vec) - 2 * log (cut_fraction);
-    // }
   }
-
-  // res += 2.0 * log (cut_fraction);
-
-  // ncm_vector_clear (&data_vec);
 
   return res;
 }
@@ -525,14 +640,14 @@ nc_galaxy_wl_likelihood_len (NcGalaxyWLLikelihood *gwll)
  *
  */
 void
-nc_galaxy_wl_likelihood_set_cut (NcGalaxyWLLikelihood *gwl, const gdouble zp_min, const gdouble zp_max, const gdouble r_min, const gdouble r_max)
+nc_galaxy_wl_likelihood_set_cut (NcGalaxyWLLikelihood *gwl, const gdouble zp_min, const gdouble zp_max)
 {
   NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
 
+  g_assert_cmpfloat (zp_min, <, zp_max);
+
   self->zp_min = zp_min;
   self->zp_max = zp_max;
-  // self->r_min  = r_min;
-  // self->r_max  = r_max;
 }
 
 /**
@@ -544,7 +659,7 @@ nc_galaxy_wl_likelihood_set_cut (NcGalaxyWLLikelihood *gwl, const gdouble zp_min
  *
  */
 void
-nc_galaxy_wl_likelihood_set_ndata (NcGalaxyWLLikelihood *gwl, gdouble ndata)
+nc_galaxy_wl_likelihood_set_ndata (NcGalaxyWLLikelihood *gwl, gint ndata)
 {
   NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
 
@@ -552,6 +667,22 @@ nc_galaxy_wl_likelihood_set_ndata (NcGalaxyWLLikelihood *gwl, gdouble ndata)
 
   self->ndata   = ndata;
   self->samples = ncm_matrix_new (ndata, 2);
+}
+
+/**
+ * nc_galaxy_wl_likelihood_set_scale_cut:
+ * @gwl: a #NcGalaxyWL
+ * @scale: scale of the probability at which a point should be included in the cut
+ *
+ * Sets the scale of the probability at which a point should be included in the cut.
+ *
+ */
+void
+nc_galaxy_wl_likelihood_set_scale_cut (NcGalaxyWLLikelihood *gwl, const gdouble scale)
+{
+  NcGalaxyWLLikelihoodPrivate * const self = gwl->priv;
+
+  self->scale_cut = scale;
 }
 
 /**
@@ -569,3 +700,4 @@ nc_galaxy_wl_likelihood_set_sigma (NcGalaxyWLLikelihood *gwl, gdouble sigma)
 
   self->sigma = sigma;
 }
+
